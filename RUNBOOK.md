@@ -236,11 +236,26 @@ Compares document versions using sentence-level semantic similarity. Uses `all-M
 
 **Use case:** Compare two drafts of a county policy to see what changed, what was added, and which version scores higher on substance and style.
 
-**Requires:** `pip install ".[ml]"`
+**Requires:** `pip install ".[ml]"` (installs sentence-transformers, scikit-learn, scipy, numpy, pandas, nltk, PyPDF2)
+
+**Data directory:** Both tools read documents from a configurable directory. Set `CIVIC_AI_DATA_DIR` or they default to `data/` relative to the project root.
+
+```bash
+# Use default (./data/)
+python tools/golden_record_analyzer.py
+
+# Point to a custom directory
+CIVIC_AI_DATA_DIR=/path/to/county/documents python tools/golden_record_analyzer.py
+
+# Before/after comparator
+CIVIC_AI_DATA_DIR=/path/to/county/documents python tools/before_after_comparator.py
+```
+
+Place your document files (PDF or text) in the data directory with `extracted_text/` subdirectory for source texts.
 
 ### Before/After Comparator (`tools/before_after_comparator.py`)
 
-Side-by-side document comparison tool.
+Side-by-side document comparison tool. Supports `--dir` and `--output` CLI arguments, or uses `CIVIC_AI_DATA_DIR` env var.
 
 ---
 
@@ -266,6 +281,7 @@ manatee-civic-ai/
 | `OLLAMA_HOST` | No | Ollama URL (defaults to `http://localhost:11434`) |
 | `COOKBOOK_LLM_API_KEY` | No | API key for Azure OpenAI or OpenAI direct |
 | `COOKBOOK_LLM_BASE_URL` | No | Custom LLM endpoint URL |
+| `CIVIC_AI_DATA_DIR` | No | Document directory for tools (defaults to `./data/`) |
 
 For air-gapped operation, no environment variables are needed. Just install Ollama and pull a model.
 
@@ -276,7 +292,7 @@ For air-gapped operation, no environment variables are needed. Just install Olla
 | Problem | Fix |
 |---------|-----|
 | `ModuleNotFoundError: loguru` | `pip install -e .` |
-| `ModuleNotFoundError: sentence_transformers` | `pip install -e ".[ml]"` |
+| `ModuleNotFoundError: sentence_transformers` | `pip install -e ".[ml]"` (also installs numpy, pandas, nltk, PyPDF2) |
 | Ollama health check returns "unavailable" | Start Ollama: `ollama serve` |
 | Ollama chat returns "model not found" | Pull the model: `ollama pull phi4` |
 | Civic AI agent returns no KB results | Verify `knowledge_base/*.md` files exist |
