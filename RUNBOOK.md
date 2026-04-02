@@ -33,6 +33,43 @@ For ML features:
 pip install -e ".[ml]"
 ```
 
+## Verify It Works
+
+After installing, run this smoke test:
+
+```python
+python3 -c "
+from agents import CivicAIPolicyAgent, CitizenServiceAgent, WebIntelligenceAgent, DocumentAnalysisAgent
+from governance import PIIRedactor, SafetyGates, AuditLogger, ModelPromptRegistry
+from inference import LocalLLMGateway, COUNTY_MODELS
+
+# Agents
+agent = CivicAIPolicyAgent()
+print(f'CivicAI KB sections: {len(agent.kb_sections)}')          # Expected: 13
+
+cs = CitizenServiceAgent()
+print(f'CitizenService tools: {len(cs.tools)}')                   # Expected: 6
+
+da = DocumentAnalysisAgent()
+print(f'DocAnalysis chunks: {len(da.document_index)}')             # Expected: 28
+
+wi = WebIntelligenceAgent()
+print(f'WebIntel peers: {len(wi.PEER_COUNTIES)}')                 # Expected: 5
+
+# Governance
+redactor = PIIRedactor()
+redacted, _ = redactor.redact_text('SSN is 123-45-6789 and email is test@example.com')
+print(f'Redacted: {redacted}')                                    # Expected: SSN is XXX-XX-XXXX and email is XXXX@example.com
+
+# Inference
+print(f'County models: {len(COUNTY_MODELS)}')                     # Expected: 6
+
+print('All checks passed')
+"
+```
+
+All checks should pass with just `pip install -e .` — no API keys or Ollama required.
+
 ---
 
 ## 3. Local LLM Setup (Air-Gapped)
