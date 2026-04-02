@@ -357,7 +357,7 @@ if __name__ == "__main__":
         event_type=AuditEventType.USER_LOGIN,
         user_id="admin@mymanatee.org",
         action="User logged in",
-        resource="Manus Chatbot System",
+        resource="Civic AI Platform",
         result="success",
         severity=AuditSeverity.INFO,
         ip_address="192.168.1.100",

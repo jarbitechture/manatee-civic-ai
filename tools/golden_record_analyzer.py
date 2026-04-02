@@ -93,9 +93,9 @@ def _get_tfidf():
 # Constants
 # ---------------------------------------------------------------------------
 
-GOV_AI_DIR = Path.home() / "Desktop" / "Government AI"
+GOV_AI_DIR = Path(os.environ.get("CIVIC_AI_DATA_DIR", str(Path(__file__).parent.parent / "data")))
 EXTRACTED_DIR = GOV_AI_DIR / "extracted_text"
-OUTPUT_DIR = GOV_AI_DIR / "tools" / "output"
+OUTPUT_DIR = GOV_AI_DIR / "output"
 
 # Substance vs style tier weights
 SUBSTANCE_WEIGHT = 0.70

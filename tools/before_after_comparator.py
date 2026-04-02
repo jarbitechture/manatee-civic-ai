@@ -586,10 +586,10 @@ def compare_pair(pair_name: str, before_path: str, after_path: str) -> Compariso
 
 def main():
     parser = argparse.ArgumentParser(description="BEFORE/AFTER document comparator")
-    parser.add_argument("--dir", default=os.path.expanduser("~/Desktop/Government AI"),
+    _data_dir = os.environ.get("CIVIC_AI_DATA_DIR", str(Path(__file__).parent.parent / "data"))
+    parser.add_argument("--dir", default=_data_dir,
                         help="Directory to scan for BEFORE/AFTER pairs")
-    parser.add_argument("--output", default=os.path.expanduser(
-        "~/Desktop/before_after_substance_analysis.md"),
+    parser.add_argument("--output", default=str(Path(_data_dir) / "before_after_substance_analysis.md"),
                         help="Output report path")
     parser.add_argument("--threshold-after", type=float, default=RECOMMEND_AFTER,
                         help="P threshold to recommend AFTER")

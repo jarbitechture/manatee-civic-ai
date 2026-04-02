@@ -1,6 +1,6 @@
 # Government AI Policy Documents Knowledge Base
 **Generated:** 2026-02-17
-**Source:** 13 government AI policy documents from /Desktop/Government AI/
+**Source:** 13 government AI policy documents
 **Purpose:** Enhanced knowledge base for the Civic AI Policy Agent
 
 ---
