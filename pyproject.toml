@@ -19,6 +19,9 @@ ml = [
     "PyPDF2>=3.0",
 ]
 
+[tool.setuptools.packages.find]
+include = ["agents*", "governance*", "inference*", "tools*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
