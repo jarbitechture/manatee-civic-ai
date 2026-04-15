@@ -59,8 +59,12 @@ class PIIRedactor:
         self.redaction_log: List[PIIMatch] = []
 
         # Compile regex patterns for efficiency
+        # SSN: require dashes (123-45-6789) to avoid matching arbitrary 9-digit numbers.
+        # Excludes known non-SSN ranges: 000, 666, 900-999 in area number.
         self.patterns = {
-            PIIType.SSN: re.compile(r"\b\d{3}[-]?\d{2}[-]?\d{4}\b"),
+            PIIType.SSN: re.compile(
+                r"\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b"
+            ),
             PIIType.CREDIT_CARD: re.compile(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b"),
             PIIType.EMAIL: re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
             PIIType.PHONE: re.compile(r"\b(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
@@ -68,7 +72,12 @@ class PIIRedactor:
             PIIType.DATE_OF_BIRTH: re.compile(
                 r"\b(0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])[/-](\d{2}|\d{4})\b"
             ),
-            PIIType.ZIP_CODE: re.compile(r"\b\d{5}(?:-\d{4})?\b"),
+            # ZIP: require "zip" or "ZIP" or "zip code" context nearby, or ZIP+4 format.
+            # Standalone 5-digit numbers are NOT matched (too many false positives).
+            PIIType.ZIP_CODE: re.compile(
+                r"(?:(?:zip\s*(?:code)?|ZIP)\s*:?\s*(\d{5}(?:-\d{4})?)|\b\d{5}-\d{4}\b)",
+                re.IGNORECASE,
+            ),
         }
 
     def detect_pii(self, text: str) -> List[PIIMatch]:
@@ -85,15 +94,24 @@ class PIIRedactor:
 
         for pii_type, pattern in self.patterns.items():
             for match in pattern.finditer(text):
-                original = match.group()
+                # ZIP contextual pattern: group(1) has the digits when preceded by "zip"
+                if pii_type == PIIType.ZIP_CODE and match.group(1):
+                    original = match.group(1)
+                    start_pos = match.start(1)
+                    end_pos = match.end(1)
+                else:
+                    original = match.group()
+                    start_pos = match.start()
+                    end_pos = match.end()
+
                 redacted = self._redact_value(original, pii_type)
 
                 pii_match = PIIMatch(
                     pii_type=pii_type,
                     original_value=original,
                     redacted_value=redacted,
-                    start_pos=match.start(),
-                    end_pos=match.end(),
+                    start_pos=start_pos,
+                    end_pos=end_pos,
                     confidence=self._calculate_confidence(original, pii_type),
                 )
                 matches.append(pii_match)
@@ -130,10 +148,8 @@ class PIIRedactor:
         """Calculate confidence score for PII detection"""
         # Basic confidence calculation - can be enhanced with ML models
         if pii_type == PIIType.SSN:
-            # High confidence if matches SSN format exactly
-            if re.match(r"^\d{3}-\d{2}-\d{4}$", value):
-                return 0.95
-            return 0.75
+            # Pattern now requires dashes and excludes invalid ranges, so high confidence
+            return 0.95
         elif pii_type == PIIType.CREDIT_CARD:
             # Validate using Luhn algorithm
             if self._luhn_check(value):

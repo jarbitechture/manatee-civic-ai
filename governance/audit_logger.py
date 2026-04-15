@@ -4,6 +4,7 @@ Provides full audit trail for compliance and security
 Designed for government/public sector requirements (NIST 800-53, FISMA)
 """
 
+import fcntl
 import json
 import logging
 from typing import Dict, List, Optional, Any
@@ -98,16 +99,10 @@ class AuditLogger:
         self.current_log_file = self.log_dir / f"audit_{datetime.now().strftime('%Y%m%d')}.jsonl"
         self.master_index_file = self.log_dir / "audit_index.json"
 
-        # Initialize Python logger
-        self.logger = logging.getLogger("AuditLogger")
+        # Initialize Python logger (console only — JSONL file is written directly with locking)
+        self.logger = logging.getLogger(f"AuditLogger.{id(self)}")
         self.logger.setLevel(logging.DEBUG)
-
-        # File handler for structured logs
-        file_handler = logging.FileHandler(self.current_log_file)
-        file_handler.setLevel(logging.DEBUG)
-        formatter = logging.Formatter("%(message)s")
-        file_handler.setFormatter(formatter)
-        self.logger.addHandler(file_handler)
+        self.logger.handlers.clear()
 
         # Console handler for high-severity events
         console_handler = logging.StreamHandler()
@@ -119,10 +114,14 @@ class AuditLogger:
         self._load_index()
 
     def _load_index(self):
-        """Load audit index"""
+        """Load audit index with shared lock"""
         if self.master_index_file.exists():
             with open(self.master_index_file, "r") as f:
-                self.index = json.load(f)
+                fcntl.flock(f, fcntl.LOCK_SH)
+                try:
+                    self.index = json.load(f)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
         else:
             self.index = {
                 "created_at": datetime.now().isoformat(),
@@ -131,9 +130,14 @@ class AuditLogger:
             }
 
     def _save_index(self):
-        """Save audit index"""
+        """Save audit index with exclusive file lock"""
         with open(self.master_index_file, "w") as f:
-            json.dump(self.index, f, indent=2)
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                json.dump(self.index, f, indent=2)
+                f.flush()
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
 
     def _generate_event_id(self, event: Dict) -> str:
         """Generate unique event ID"""
@@ -189,9 +193,14 @@ class AuditLogger:
             compliance_tags=compliance_tags or [],
         )
 
-        # Write to log file (JSONL format - one JSON object per line)
+        # Write to log file with exclusive lock (prevents concurrent write corruption)
         with open(self.current_log_file, "a") as f:
-            f.write(json.dumps(event_data) + "\n")
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                f.write(json.dumps(event_data) + "\n")
+                f.flush()
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
 
         # Log to Python logger
         log_level = getattr(logging, severity.value.upper())
@@ -199,7 +208,7 @@ class AuditLogger:
             log_level, f"[{event_type.value}] {action} on {resource} by {user_id}: {result}"
         )
 
-        # Update index
+        # Update index with exclusive lock
         self.index["total_events"] += 1
         if str(self.current_log_file) not in self.index["log_files"]:
             self.index["log_files"].append(str(self.current_log_file))

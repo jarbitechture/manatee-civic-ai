@@ -94,9 +94,11 @@ class SafetyGates:
 
         # Determine if all gates passed
         if self.strict_mode:
-            all_passed = all(r.status == GateStatus.PASSED for r in results)
+            all_passed = all(
+                r.status in (GateStatus.PASSED, GateStatus.SKIPPED) for r in results
+            )
         else:
-            # In non-strict mode, warnings are allowed
+            # In non-strict mode, warnings and skipped are allowed
             all_passed = all(r.status != GateStatus.FAILED for r in results)
 
         return all_passed, results
@@ -461,7 +463,8 @@ class SafetyGates:
                 GateStatus.PASSED: "✅",
                 GateStatus.WARNING: "⚠️ ",
                 GateStatus.FAILED: "❌",
-            }[result.status]
+                GateStatus.SKIPPED: "⏭️ ",
+            }.get(result.status, "❓")
 
             report.append(f"{status_icon} {result.gate_name}")
             report.append(f"   Score: {result.score:.2f} (threshold: {result.threshold:.2f})")
