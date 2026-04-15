@@ -22,6 +22,17 @@ Civic AI platform for Manatee County — 4 agents, a governance layer, and local
 | **Audit Logger** | Logs all AI operations with timestamps, user IDs, event types. Query by user, event type, or time range |
 | **Model Registry** | Tracks deployed models and prompts, versions, promotion status (development → testing → production) |
 
+### Governed LLM Proxy (`api_server.py`)
+
+OpenAI-compatible API that sits between any county app and the LLM. Every request goes through PII redaction, safety gates, and audit logging before reaching the model. Any tool that speaks the OpenAI chat completions format can use this as a drop-in replacement.
+
+```
+County App  →  Governed Proxy (/v1/chat/completions)  →  Ollama / Azure OpenAI
+                  ├── PII redaction
+                  ├── Safety gates (injection, jailbreak)
+                  └── Audit logging
+```
+
 ### Inference
 
 | Component | Description |
@@ -48,6 +59,22 @@ For ML features (golden record analyzer, embeddings):
 ```bash
 pip install -e ".[ml]"
 ```
+
+### Start the Governed LLM Proxy
+
+```bash
+# With Ollama (air-gapped)
+CIVIC_AI_API_KEY=your-key uvicorn api_server:app --port 8100
+
+# With Azure OpenAI
+CIVIC_AI_API_KEY=your-key \
+CIVIC_AI_LLM_PROVIDER=azure_openai \
+CIVIC_AI_LLM_API_KEY=your-azure-key \
+CIVIC_AI_LLM_BASE_URL=https://{resource}.openai.azure.com/openai/deployments/{model}/v1 \
+uvicorn api_server:app --port 8100
+```
+
+Any OpenAI-compatible app can now point at `http://localhost:8100/v1` and all requests go through governance.
 
 ## Verify It Works
 
@@ -112,14 +139,52 @@ manatee-civic-ai/
 
 ## Environment Variables
 
+### Governed LLM Proxy
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CIVIC_AI_API_KEY` | No | API key clients must send (Bearer token). If unset, proxy runs in open-access mode. |
+| `CIVIC_AI_LLM_PROVIDER` | No | `ollama`, `azure_openai`, or `openai` (default: `ollama`) |
+| `CIVIC_AI_LLM_API_KEY` | No | API key for the upstream LLM provider |
+| `CIVIC_AI_LLM_BASE_URL` | No | LLM endpoint (default: `http://localhost:11434/v1`) |
+| `CIVIC_AI_LLM_DEFAULT_MODEL` | No | Default model name (default: `phi4`) |
+| `CIVIC_AI_AUDIT_DIR` | No | Audit log directory (default: `logs/audit`) |
+| `CIVIC_AI_RATE_LIMIT` | No | Max requests per window (default: `60`) |
+| `CIVIC_AI_RATE_WINDOW` | No | Rate limit window in seconds (default: `900`) |
+
+### Agents and Tools
+
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OLLAMA_HOST` | No | Ollama URL (default: `http://localhost:11434`) |
-| `COOKBOOK_LLM_API_KEY` | No | API key for Azure OpenAI or OpenAI |
-| `COOKBOOK_LLM_BASE_URL` | No | Custom LLM endpoint URL |
 | `CIVIC_AI_DATA_DIR` | No | Document directory for tools (default: `./data/`) |
 
 For air-gapped operation, no environment variables are needed. Just install Ollama and pull a model.
+
+## County Use Cases
+
+### Prompt Cookbook Integration
+
+The [Prompt Cookbook](https://github.com/jarbitechture/prompt-cookbook-gov) is a separate training app that teaches county staff to write prompts. It has "Try It" and "Chat" features that send prompts to an LLM. By pointing the cookbook's `COOKBOOK_LLM_BASE_URL` at this governed proxy, every staff prompt goes through PII redaction and audit logging — without changing the cookbook's code.
+
+```
+# In the Prompt Cookbook's environment:
+COOKBOOK_LLM_API_KEY=your-civic-ai-key
+COOKBOOK_LLM_BASE_URL=http://civic-ai-server:8100/v1
+```
+
+### Other County Applications
+
+| Use Case | How It Works |
+|----------|-------------|
+| **311 Service Desk** | Citizen Service Agent + governed proxy. Staff paste citizen inquiries, AI drafts responses. PII is redacted before the LLM sees it. Every interaction is audit-logged for public records. |
+| **Policy Drafting** | Staff write policy drafts with AI help. Golden Record Analyzer compares versions. Safety gates block prompts that try to override AI behavior. |
+| **Board Meeting Prep** | Document Analysis Agent searches county ordinances and policies. Policy Agent provides framework guidance. All queries logged for transparency. |
+| **IT Helpdesk Triage** | Staff describe issues in plain language, AI categorizes and routes. Governed proxy ensures no PII (employee IDs, passwords) reaches the LLM. |
+| **Public Records Requests** | Document Analysis Agent searches indexed documents. Audit trail shows exactly what was searched, by whom, and when — ready for FOIA compliance. |
+| **Training & Onboarding** | New hires use the Prompt Cookbook to learn AI prompting. Every practice prompt goes through governance. Managers can review audit logs to track training progress. |
+| **Budget Analysis** | Staff paste spreadsheet data into prompts for summarization. PII redaction catches any embedded SSNs or account numbers before they reach the model. |
+| **Legislative Monitoring** | Web Intelligence Agent tracks Florida AI bills and peer county programs. Generates briefings for county leadership. |
 
 ## Requirements
 
