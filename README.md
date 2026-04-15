@@ -2,6 +2,8 @@
 
 Civic AI platform for Manatee County — 4 agents, a governance layer, and local LLM inference. Everything runs on-premise. No citizen data leaves the county network unless you choose a cloud model.
 
+The [Prompt Cookbook](https://github.com/jarbitechture/prompt-cookbook-gov) is the training tool. Civic AI is the governance layer. They work independently, but when the cookbook routes through Civic AI, training becomes supervised and auditable.
+
 ## What's Inside
 
 ### Agents
