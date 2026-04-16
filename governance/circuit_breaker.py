@@ -27,6 +27,7 @@ class CircuitBreaker:
         self._state = CircuitState.CLOSED
         self._failure_count = 0
         self._last_failure_time: float = 0.0
+        self._half_open_probe_sent = False
 
     @property
     def state(self) -> CircuitState:
@@ -40,24 +41,29 @@ class CircuitBreaker:
         if current == CircuitState.CLOSED:
             return True
         if current == CircuitState.HALF_OPEN:
-            self._state = CircuitState.HALF_OPEN
-            return True
+            if not self._half_open_probe_sent:
+                self._state = CircuitState.HALF_OPEN
+                self._half_open_probe_sent = True
+                return True
+            return False  # probe already in flight
         return False  # OPEN
 
     def record_success(self):
         self._failure_count = 0
+        self._half_open_probe_sent = False
         self._state = CircuitState.CLOSED
         logger.debug("Circuit breaker: closed (success)")
 
     def record_failure(self):
         self._failure_count += 1
         self._last_failure_time = time.time()
-        if self._failure_count >= self.failure_threshold:
+        if self._state == CircuitState.HALF_OPEN:
+            self._half_open_probe_sent = False
+            self._state = CircuitState.OPEN
+            logger.warning("Circuit breaker: re-opened (half-open probe failed)")
+        elif self._failure_count >= self.failure_threshold:
             self._state = CircuitState.OPEN
             logger.warning(
                 f"Circuit breaker: OPEN after {self._failure_count} failures. "
                 f"Recovery in {self.recovery_timeout}s."
             )
-        elif self._state == CircuitState.HALF_OPEN:
-            self._state = CircuitState.OPEN
-            logger.warning("Circuit breaker: re-opened (half-open probe failed)")
