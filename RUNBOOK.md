@@ -478,7 +478,7 @@ manatee-civic-ai/
 ├── inference/               Local LLM gateway + model config
 ├── knowledge_base/          13 gov AI documents (38K+ words)
 ├── tools/                   Golden record analyzer, comparator
-├── tests/                   47 tests (governance + API server + circuit breaker)
+├── tests/                   54 tests (governance + API server + circuit breaker + integration)
 ├── api_server.py            Governed LLM proxy (FastAPI)
 └── pyproject.toml
 ```
@@ -510,7 +510,7 @@ manatee-civic-ai/
 |-----------|--------|--------------|
 | Civic AI Policy Agent | Ready | Serving real data from 13 gov docs |
 | Citizen Service Agent | Ready | Manatee-specific departments, FAQs, 311 |
-| Governed LLM Proxy | Ready | OpenAI-compatible, PII redaction, safety gates, audit, 37 tests |
+| Governed LLM Proxy | Ready | OpenAI-compatible, PII redaction, safety gates, audit, circuit breaker, 54 tests |
 | Governance modules | Ready | PII, safety, audit, registry all functional |
 | Golden record analyzer | Ready | Proven on 3 policy documents |
 | Local LLM gateway | Ready | Ollama wrapper, tested |

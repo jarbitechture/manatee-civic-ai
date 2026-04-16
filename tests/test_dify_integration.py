@@ -27,8 +27,9 @@ skip_if_no_proxy = pytest.mark.skipif(
     not proxy_available(), reason="civic-ai proxy not running"
 )
 
+pytestmark = [pytest.mark.integration, skip_if_no_proxy]
 
-@skip_if_no_proxy
+
 class TestPlatformIntegration:
     """Tests that simulate what an agent builder platform does
     when it connects to an OpenAI-compatible model provider."""
