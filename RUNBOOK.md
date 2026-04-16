@@ -275,9 +275,31 @@ uvicorn api_server:app --host 0.0.0.0 --port 8100
 2. **Rate limit** — Per-IP, configurable (default 60 requests per 15 minutes)
 3. **PII redaction** — SSNs, emails, phones, credit cards redacted from user messages
 4. **Safety gates** — Prompt injection and jailbreak patterns blocked (HTTP 422)
-5. **Audit log** — Request logged with user IP, model, message count, PII detected flag
-6. **LLM forward** — Clean request sent to the configured LLM provider
-7. **Response** — LLM response returned as-is (OpenAI format)
+5. **Circuit breaker** — If inference is down, returns 503 instead of piling up requests (see below)
+6. **Audit log** — Request logged with user IP, model, message count, PII detected flag
+7. **LLM forward** — Clean request sent to the configured LLM provider
+8. **Response** — LLM response returned as-is (OpenAI format)
+
+### Circuit Breaker
+
+When the LLM inference server (Ollama, vLLM) goes down, the circuit breaker prevents request pileup:
+
+| State | Behavior |
+|-------|----------|
+| **Closed** (normal) | Requests pass through to the LLM |
+| **Open** (after N failures) | Returns HTTP 503 immediately — no request sent to LLM |
+| **Half-open** (after timeout) | One probe request tests if LLM is back. Success closes the breaker; failure re-opens it. |
+
+Only one probe is allowed in half-open state. Additional requests get 503 until the probe succeeds.
+
+Configure via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CIVIC_AI_CB_FAILURES` | `5` | Consecutive failures before breaker opens |
+| `CIVIC_AI_CB_TIMEOUT` | `30.0` | Seconds before a probe is allowed |
+
+The `/health` endpoint reports circuit breaker state. All circuit breaker events (open, probe, close) are written to the audit log.
 
 ### Verify the Proxy
 
@@ -323,6 +345,33 @@ No code changes in the cookbook. It already supports custom base URLs.
 | `CIVIC_AI_AUDIT_DIR` | `logs/audit` | Directory for JSONL audit logs |
 | `CIVIC_AI_RATE_LIMIT` | `60` | Max requests per rate limit window |
 | `CIVIC_AI_RATE_WINDOW` | `900` | Window duration in seconds |
+| `CIVIC_AI_CB_FAILURES` | `5` | Circuit breaker failure threshold |
+| `CIVIC_AI_CB_TIMEOUT` | `30.0` | Circuit breaker recovery timeout (seconds) |
+
+### Using This Proxy as a Backend for Other Platforms
+
+This proxy is an OpenAI-compatible API. Any platform that supports "OpenAI-compatible" or "custom model providers" can point to it. The platform sends chat completion requests; the proxy governs them (PII, safety, audit) and forwards to the LLM.
+
+To connect a platform (e.g., Dify, Open WebUI, or any custom app):
+- **Base URL:** `http://<proxy-host>:8100/v1`
+- **API Key:** The value of `CIVIC_AI_API_KEY`
+- **Model name:** Whatever is loaded in Ollama (e.g., `phi4`)
+
+The platform doesn't need to know about governance. It thinks it's talking to OpenAI.
+
+### Two-Repo Architecture
+
+This repo (`manatee-civic-ai`) contains the **governance code, agents, and proxy** — all generic, no infrastructure-specific details, safe for public sharing.
+
+Deployment configuration (Docker/Podman compose files, CI/CD pipelines, IIS reverse proxy setup, runbooks with infrastructure-specific steps) lives in a separate **deploy repo** (`manatee-civic-ai-deploy`). The deploy repo:
+- References this repo as a pip dependency
+- Contains `.env.template` files with placeholder values (real secrets come from Key Vault at deploy time)
+- Is also sanitized — no real IPs, hostnames, or credentials committed
+
+This separation exists because:
+1. Governance code is reusable across any deployment environment
+2. Infrastructure config contains topology details that shouldn't be public
+3. County repo sharing rules require one-way extraction — code flows from internal to sanitized, never back
 
 ---
 
@@ -425,11 +474,11 @@ Side-by-side document comparison tool. Supports `--dir` and `--output` CLI argum
 ```
 manatee-civic-ai/
 ├── agents/                  4 agents + base class
-├── governance/              PII, safety gates, audit, model registry
+├── governance/              PII, safety gates, audit, model registry, circuit breaker
 ├── inference/               Local LLM gateway + model config
 ├── knowledge_base/          13 gov AI documents (38K+ words)
 ├── tools/                   Golden record analyzer, comparator
-├── tests/                   37 tests (governance + API server)
+├── tests/                   47 tests (governance + API server + circuit breaker)
 ├── api_server.py            Governed LLM proxy (FastAPI)
 └── pyproject.toml
 ```
@@ -450,7 +499,8 @@ manatee-civic-ai/
 | Proxy returns 401 | Send `Authorization: Bearer <CIVIC_AI_API_KEY>` header |
 | Proxy returns 422 | Safety gates blocked the prompt — check for injection patterns |
 | Proxy returns 429 | Rate limit exceeded. Increase `CIVIC_AI_RATE_LIMIT` or wait. |
-| Proxy returns 502 | LLM provider is unreachable. Check `CIVIC_AI_LLM_BASE_URL` and that Ollama/Azure is running. |
+| Proxy returns 502 | LLM provider returned an error. Check `CIVIC_AI_LLM_BASE_URL` and that Ollama/Azure is running. |
+| Proxy returns 503 | Circuit breaker is open — inference server is down. Check Ollama/vLLM, then wait for recovery timeout (default 30s). |
 
 ---
 

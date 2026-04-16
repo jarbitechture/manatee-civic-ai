@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from governance.audit_logger import AuditLogger, AuditEventType, AuditSeverity
+from governance.circuit_breaker import CircuitBreaker
 from governance.pii_redaction import PIIRedactor
 from governance.safety_gates import SafetyGates, GateStatus
 
@@ -62,7 +63,6 @@ redactor = PIIRedactor()
 gates = SafetyGates(strict_mode=False)  # non-strict: warnings pass, only failures block
 audit = AuditLogger(log_dir=AUDIT_LOG_DIR)
 
-from governance.circuit_breaker import CircuitBreaker
 llm_circuit_breaker = CircuitBreaker(
     failure_threshold=int(os.environ.get("CIVIC_AI_CB_FAILURES", "5")),
     recovery_timeout=float(os.environ.get("CIVIC_AI_CB_TIMEOUT", "30.0")),
@@ -315,8 +315,25 @@ async def chat_completions(request: ChatRequest, raw_request: Request):
     # Forward to LLM
     try:
         if request.stream:
+            async def stream_with_breaker():
+                try:
+                    async for chunk in forward_to_llm_stream(request, governed_messages):
+                        yield chunk
+                    llm_circuit_breaker.record_success()
+                except Exception as e:
+                    llm_circuit_breaker.record_failure()
+                    audit.log_event(
+                        event_type=AuditEventType.ERROR,
+                        user_id=client_ip,
+                        action=f"Streaming LLM error: {str(e)}",
+                        resource=request.model or LLM_DEFAULT_MODEL,
+                        result="failure",
+                        severity=AuditSeverity.ERROR,
+                    )
+                    raise
+
             return StreamingResponse(
-                forward_to_llm_stream(request, governed_messages),
+                stream_with_breaker(),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
             )
