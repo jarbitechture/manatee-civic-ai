@@ -61,6 +61,13 @@ rate_limiter = RateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW)
 redactor = PIIRedactor()
 gates = SafetyGates(strict_mode=False)  # non-strict: warnings pass, only failures block
 audit = AuditLogger(log_dir=AUDIT_LOG_DIR)
+
+from governance.circuit_breaker import CircuitBreaker
+llm_circuit_breaker = CircuitBreaker(
+    failure_threshold=int(os.environ.get("CIVIC_AI_CB_FAILURES", "5")),
+    recovery_timeout=float(os.environ.get("CIVIC_AI_CB_TIMEOUT", "30.0")),
+)
+
 http_client: httpx.AsyncClient | None = None
 
 
@@ -277,6 +284,21 @@ async def chat_completions(request: ChatRequest, raw_request: Request):
             detail="Request blocked by safety gates. The prompt may contain injection attempts or other policy violations.",
         )
 
+    # Circuit breaker check
+    if not llm_circuit_breaker.allow_request():
+        audit.log_event(
+            event_type=AuditEventType.ERROR,
+            user_id=client_ip,
+            action="Circuit breaker open — inference unavailable",
+            resource=request.model or LLM_DEFAULT_MODEL,
+            result="failure",
+            severity=AuditSeverity.WARNING,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Circuit breaker open: inference server is temporarily unavailable. Try again shortly.",
+        )
+
     # Audit the request
     audit.log_event(
         event_type=AuditEventType.PROMPT_EXECUTION,
@@ -300,9 +322,11 @@ async def chat_completions(request: ChatRequest, raw_request: Request):
             )
 
         llm_response = await forward_to_llm(request, governed_messages)
+        llm_circuit_breaker.record_success()
         return llm_response
 
     except httpx.HTTPStatusError as e:
+        llm_circuit_breaker.record_failure()
         audit.log_event(
             event_type=AuditEventType.ERROR,
             user_id=client_ip,
@@ -313,6 +337,7 @@ async def chat_completions(request: ChatRequest, raw_request: Request):
         )
         raise HTTPException(status_code=502, detail=f"LLM provider error: {e.response.status_code}")
     except Exception as e:
+        llm_circuit_breaker.record_failure()
         audit.log_event(
             event_type=AuditEventType.ERROR,
             user_id=client_ip,

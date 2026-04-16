@@ -141,3 +141,23 @@ class TestValidation:
             headers=AUTH,
         )
         assert r.status_code == 422
+
+
+class TestCircuitBreaker:
+    def test_circuit_breaker_returns_503_when_open(self, monkeypatch):
+        """When circuit breaker is open, proxy returns 503 instead of forwarding."""
+        from governance.circuit_breaker import CircuitBreaker
+        import api_server
+
+        # Force circuit breaker open
+        cb = CircuitBreaker(failure_threshold=1, recovery_timeout=60.0)
+        cb.record_failure()
+        monkeypatch.setattr(api_server, "llm_circuit_breaker", cb)
+
+        r = client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "hello"}]},
+            headers={"Authorization": "Bearer test-key-123"},
+        )
+        assert r.status_code == 503
+        assert "circuit breaker" in r.json()["detail"].lower()
