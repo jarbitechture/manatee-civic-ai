@@ -24,6 +24,13 @@ class TestHealth:
         assert r.json()["status"] == "ok"
         assert r.json()["governance"] == "active"
 
+    def test_health_includes_circuit_breaker_state(self):
+        r = client.get("/health")
+        assert r.status_code == 200
+        data = r.json()
+        assert "circuit_breaker" in data
+        assert data["circuit_breaker"] in ("closed", "open", "half_open")
+
 
 class TestAuth:
     def test_rejects_missing_auth(self):

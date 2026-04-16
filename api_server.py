@@ -242,7 +242,12 @@ async def forward_to_llm_stream(request: ChatRequest, governed_messages: list[Ch
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "provider": LLM_PROVIDER, "governance": "active"}
+    return {
+        "status": "ok",
+        "provider": LLM_PROVIDER,
+        "governance": "active",
+        "circuit_breaker": llm_circuit_breaker.state.value,
+    }
 
 
 @app.get("/v1/models")
