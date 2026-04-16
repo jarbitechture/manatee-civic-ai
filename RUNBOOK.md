@@ -6,6 +6,30 @@ A civic AI platform for Manatee County with 4 agents, a governance layer, and lo
 
 ---
 
+## Deployment Roadmap
+
+Status of each step to get the civic-ai platform running in the county environment.
+
+| Step | Status | What's needed |
+|------|--------|---------------|
+| 1. Code in Azure DevOps | Done | Repo: `ManateeCounty/AIRollout/Civic AI Platform` |
+| 2. Governance modules | Done | PII redaction, safety gates, audit logger, circuit breaker — all tested (54 tests) |
+| 3. Governed LLM proxy | Done | `api_server.py` — OpenAI-compatible, ready to run |
+| 4. Deploy repo created | Done | `ManateeCounty/AIRollout/Civic AI Deploy` — Dify compose, pipeline, runbook |
+| 5. Self-hosted agent on RHEL | Pending | Install Azure DevOps agent on RHEL, create agent pool |
+| 6. Ollama installed on RHEL | Pending | Install Ollama via Podman, pull model (`phi4` or `llama3.1:8b`) |
+| 7. Start governed proxy on RHEL | Pending | `CIVIC_AI_API_KEY=<key> uvicorn api_server:app --port 8100` |
+| 8. Verify proxy + Ollama | Pending | `curl http://localhost:8100/health` returns `"circuit_breaker":"closed"` |
+| 9. Deploy Dify on RHEL | Pending | `podman-compose -f dify-compose.yml up -d` (see [deploy repo RUNBOOK](https://github.com/jarbitechture/manatee-civic-ai-deploy/blob/main/docs/DIFY_SETUP.md)) |
+| 10. Configure Dify model provider | Pending | Add governed proxy as OpenAI-compatible provider in Dify admin |
+| 11. IIS reverse proxy + Windows Auth | Pending | IT configures IIS to front Dify with AD authentication |
+| 12. Create department agent templates | Pending | Pre-build starter agents for IT, HR, Legal, Finance in Dify |
+| 13. Verify end-to-end | Pending | Staff logs in via AD, builds an agent, runs it, response goes through governance |
+
+Steps 1-4 are done. Steps 5-8 are RHEL infrastructure. Steps 9-12 are agent builder platform. Step 13 is final validation.
+
+---
+
 ## 1. Prerequisites
 
 | Requirement | Version | Why |
