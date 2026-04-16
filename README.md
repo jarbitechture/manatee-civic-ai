@@ -22,16 +22,18 @@ The [Prompt Cookbook](https://github.com/jarbitechture/prompt-cookbook-gov) is t
 | **PII Redaction** | Scans text for SSNs, emails, phone numbers, credit cards before it reaches an LLM or gets stored |
 | **Safety Gates** | Pre-flight checks before any AI operation — validates content passes safety thresholds |
 | **Audit Logger** | Logs all AI operations with timestamps, user IDs, event types. Query by user, event type, or time range |
+| **Circuit Breaker** | Prevents request pileup when the LLM is down. Opens after N failures, probes to test recovery, closes on success. Returns 503 instead of hanging. |
 | **Model Registry** | Tracks deployed models and prompts, versions, promotion status (development → testing → production) |
 
 ### Governed LLM Proxy (`api_server.py`)
 
-OpenAI-compatible API that sits between any county app and the LLM. Every request goes through PII redaction, safety gates, and audit logging before reaching the model. Any tool that speaks the OpenAI chat completions format can use this as a drop-in replacement.
+OpenAI-compatible API that sits between any county app and the LLM. Every request goes through PII redaction, safety gates, circuit breaker protection, and audit logging before reaching the model. Any tool that speaks the OpenAI chat completions format can use this as a drop-in replacement — including agent builder platforms like [Dify](https://github.com/langgenius/dify).
 
 ```
 County App  →  Governed Proxy (/v1/chat/completions)  →  Ollama / Azure OpenAI
                   ├── PII redaction
                   ├── Safety gates (injection, jailbreak)
+                  ├── Circuit breaker (503 when LLM is down)
                   └── Audit logging
 ```
 
@@ -131,11 +133,11 @@ asyncio.run(test())
 ```
 manatee-civic-ai/
 ├── agents/                  4 agents + base class
-├── governance/              PII, safety gates, audit, model registry
+├── governance/              PII, safety gates, audit, circuit breaker, model registry
 ├── inference/               Local LLM gateway + model config
 ├── knowledge_base/          13 gov AI documents (38K+ words)
 ├── tools/                   Golden record analyzer, comparator
-├── tests/
+├── tests/                   54 tests (unit + integration)
 └── pyproject.toml
 ```
 
@@ -153,6 +155,8 @@ manatee-civic-ai/
 | `CIVIC_AI_AUDIT_DIR` | No | Audit log directory (default: `logs/audit`) |
 | `CIVIC_AI_RATE_LIMIT` | No | Max requests per window (default: `60`) |
 | `CIVIC_AI_RATE_WINDOW` | No | Rate limit window in seconds (default: `900`) |
+| `CIVIC_AI_CB_FAILURES` | No | Circuit breaker failure threshold (default: `5`) |
+| `CIVIC_AI_CB_TIMEOUT` | No | Circuit breaker recovery timeout in seconds (default: `30`) |
 
 ### Agents and Tools
 
@@ -193,6 +197,10 @@ COOKBOOK_LLM_BASE_URL=http://civic-ai-server:8100/v1
 - Python 3.11+
 - pip
 - Ollama (optional, for local LLM)
+
+## Deployment
+
+This repo contains the governance code, agents, and proxy — all generic and safe for reuse. Deployment configuration (Docker/Podman compose, CI/CD pipelines, IIS reverse proxy setup) lives in a separate private repo. See [RUNBOOK.md](RUNBOOK.md) for the two-repo architecture and platform integration details.
 
 ## Detailed Documentation
 
