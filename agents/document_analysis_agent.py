@@ -1,6 +1,10 @@
 """
 Document Analysis Agent — RAG over county policies and ordinances
 Ingests county documents and provides conversational search with source citations.
+
+Search is hybrid: semantic (Ollama embeddings) + keyword, blended 70/30. If the
+embeddings gateway is unavailable or numpy is missing, search falls back to
+keyword-only. Vectors are cached per content hash in `<docs_dir>/.index.npz`.
 """
 
 import hashlib
@@ -11,6 +15,18 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from agents.base_agent import AgentContext, AgentResult, BaseAgent
+
+try:
+    import numpy as np
+
+    _HAS_NUMPY = True
+except ImportError:
+    np = None  # type: ignore[assignment]
+    _HAS_NUMPY = False
+
+SEMANTIC_WEIGHT = 0.7
+KEYWORD_WEIGHT = 0.3
+CACHE_FILENAME = ".index.npz"
 
 
 class DocumentAnalysisAgent(BaseAgent):
@@ -24,9 +40,17 @@ class DocumentAnalysisAgent(BaseAgent):
     - Summarize documents or sections
     """
 
-    def __init__(self, model_client: Any = None, docs_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        model_client: Any = None,
+        docs_dir: Optional[Path] = None,
+        embeddings_gateway: Any = None,
+    ):
         self.docs_dir = docs_dir or Path(__file__).parent.parent / "knowledge_base"
         self.document_index: List[Dict[str, Any]] = []
+        self.embeddings_gateway = embeddings_gateway
+        self._vectors: Any = None  # (n, d) normalized matrix, or None
+        self._vectors_loaded = False
         super().__init__(
             name="Document Analysis Agent",
             description="RAG over county policies, ordinances, and governance documents",
@@ -76,16 +100,21 @@ class DocumentAnalysisAgent(BaseAgent):
             lines = section.strip().split("\n")
             title = lines[0].lstrip("#").strip() if lines else f"{name} section {i}"
 
+            content = section.strip()
             chunk = {
                 "id": hashlib.md5(f"{name}:{i}".encode()).hexdigest()[:12],
                 "document": name,
                 "section_title": title,
-                "content": section.strip(),
+                "content": content,
+                "content_hash": hashlib.sha256(content.encode()).hexdigest(),
                 "source_path": source_path,
                 "word_count": len(section.split()),
                 "chunk_index": i,
             }
             self.document_index.append(chunk)
+        # New or re-ingested content → cached vectors may be stale
+        self._vectors_loaded = False
+        self._vectors = None
 
     async def execute(self, context: AgentContext) -> AgentResult:
         request = context.request.lower()
@@ -126,40 +155,145 @@ class DocumentAnalysisAgent(BaseAgent):
             "total_chunks": len(self.document_index),
         }
 
-    async def search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
-        """Search across all ingested documents"""
-        query_lower = query.lower()
-        keywords = [k for k in query_lower.split() if len(k) > 2]
+    async def _ensure_vectors(self) -> None:
+        """Populate self._vectors. Uses on-disk cache keyed by chunk content hash."""
+        if self._vectors_loaded:
+            return
+        if self.embeddings_gateway is None or not _HAS_NUMPY or not self.document_index:
+            self._vectors_loaded = True
+            return
 
-        scored_results = []
+        current_ids = [c["id"] for c in self.document_index]
+        current_hashes = [c["content_hash"] for c in self.document_index]
+
+        cache_path = self.docs_dir / CACHE_FILENAME
+        cached: Dict[str, Any] = {}
+        if cache_path.exists():
+            try:
+                data = np.load(cache_path, allow_pickle=False)
+                for cid, chash, vec in zip(data["ids"], data["hashes"], data["vectors"]):
+                    cached[f"{cid}:{chash}"] = vec
+            except Exception as e:
+                logger.warning(f"Vector cache load failed ({cache_path.name}): {e}")
+
+        vectors: List[Optional[Any]] = [None] * len(self.document_index)
+        to_embed_idx: List[int] = []
+        for i, (cid, chash) in enumerate(zip(current_ids, current_hashes)):
+            key = f"{cid}:{chash}"
+            if key in cached:
+                vectors[i] = np.asarray(cached[key], dtype=np.float32)
+            else:
+                to_embed_idx.append(i)
+
+        if to_embed_idx:
+            texts = [self.document_index[i]["content"] for i in to_embed_idx]
+            result = await self.embeddings_gateway.embed(texts)
+            if not result.get("success"):
+                logger.warning(
+                    f"Embeddings unavailable — keyword-only search. "
+                    f"{result.get('error', 'unknown error')}"
+                )
+                self._vectors_loaded = True
+                return
+            fresh = result.get("vectors") or []
+            if len(fresh) != len(to_embed_idx):
+                logger.warning("Embedding response length mismatch; skipping semantic path.")
+                self._vectors_loaded = True
+                return
+            for j, i in enumerate(to_embed_idx):
+                vectors[i] = np.asarray(fresh[j], dtype=np.float32)
+
+        try:
+            matrix = np.stack(vectors)
+        except ValueError as e:
+            logger.warning(f"Vector stack failed: {e}")
+            self._vectors_loaded = True
+            return
+
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        self._vectors = matrix / norms
+        self._vectors_loaded = True
+
+        try:
+            np.savez(
+                cache_path,
+                ids=np.array(current_ids),
+                hashes=np.array(current_hashes),
+                vectors=matrix,
+            )
+        except Exception as e:
+            logger.warning(f"Vector cache save failed: {e}")
+
+    def _keyword_scores(self, keywords: List[str]) -> List[float]:
+        scores: List[float] = []
         for chunk in self.document_index:
             content_lower = chunk["content"].lower()
             title_lower = chunk["section_title"].lower()
-
-            score = 0
+            score = 0.0
             for kw in keywords:
-                score += content_lower.count(kw) * 1
+                score += content_lower.count(kw)
                 if kw in title_lower:
-                    score += 3
+                    score += 3.0
+            scores.append(score)
+        max_score = max(scores) if scores else 0.0
+        if max_score > 0:
+            scores = [s / max_score for s in scores]
+        return scores
 
-            if score > 0:
-                # Extract best matching paragraph
-                paragraphs = chunk["content"].split("\n\n")
-                best_para = max(
-                    paragraphs,
-                    key=lambda p: sum(p.lower().count(kw) for kw in keywords),
-                    default="",
-                )
+    async def _semantic_scores(self, query: str) -> Optional[List[float]]:
+        if self._vectors is None or self.embeddings_gateway is None or not _HAS_NUMPY:
+            return None
+        result = await self.embeddings_gateway.embed([query])
+        if not result.get("success") or not result.get("vectors"):
+            return None
+        q = np.asarray(result["vectors"][0], dtype=np.float32)
+        q_norm = np.linalg.norm(q)
+        if q_norm == 0:
+            return None
+        q = q / q_norm
+        sims = self._vectors @ q  # cosine since both normalized
+        return [max(0.0, float(s)) for s in sims]
 
-                scored_results.append(
-                    {
-                        "document": chunk["document"],
-                        "section": chunk["section_title"],
-                        "score": score,
-                        "snippet": best_para[:500],
-                        "source": chunk["source_path"],
-                    }
-                )
+    async def search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
+        """Hybrid search: semantic (70%) + keyword (30%). Falls back to keyword-only."""
+        await self._ensure_vectors()
+
+        keywords = [k for k in query.lower().split() if len(k) > 2]
+        keyword_scores = self._keyword_scores(keywords)
+        semantic_scores = await self._semantic_scores(query)
+
+        if semantic_scores is not None:
+            blended = [
+                SEMANTIC_WEIGHT * s + KEYWORD_WEIGHT * k
+                for s, k in zip(semantic_scores, keyword_scores)
+            ]
+            mode = "hybrid"
+        else:
+            blended = keyword_scores
+            mode = "keyword"
+
+        scored_results: List[Dict[str, Any]] = []
+        for i, chunk in enumerate(self.document_index):
+            if blended[i] <= 0:
+                continue
+            paragraphs = chunk["content"].split("\n\n")
+            best_para = max(
+                paragraphs,
+                key=lambda p: sum(p.lower().count(kw) for kw in keywords),
+                default=chunk["content"][:500],
+            )
+            entry: Dict[str, Any] = {
+                "document": chunk["document"],
+                "section": chunk["section_title"],
+                "score": blended[i],
+                "snippet": best_para[:500],
+                "source": chunk["source_path"],
+            }
+            if mode == "hybrid":
+                entry["semantic_score"] = semantic_scores[i]  # type: ignore[index]
+                entry["keyword_score"] = keyword_scores[i]
+            scored_results.append(entry)
 
         scored_results.sort(key=lambda x: x["score"], reverse=True)
 
@@ -168,6 +302,7 @@ class DocumentAnalysisAgent(BaseAgent):
             "results": scored_results[:max_results],
             "total_matches": len(scored_results),
             "documents_searched": len(set(c["document"] for c in self.document_index)),
+            "mode": mode,
         }
 
     async def ask(self, question: str) -> Dict[str, Any]:
